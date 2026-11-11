@@ -1,0 +1,1 @@
+import {Link} from 'react-router-dom';export default function NotFound(){return <section className="section container empty-state"><span className="eyebrow">404 — NOT FOUND</span><h1>এই পৃষ্ঠাটি খুঁজে পাওয়া যায়নি।</h1><Link className="btn btn-dark" to="/">হোমে ফিরে যান</Link></section>}

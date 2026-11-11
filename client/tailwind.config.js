@@ -1,0 +1,1 @@
+export default {content:['./index.html','./src/**/*.{ts,tsx}'],theme:{extend:{colors:{walnut:'#493326',rattan:'#d8c2a1',forest:'#52634b',cream:'#f8f5ef',clay:'#b56d4d'},fontFamily:{sans:['Hind Siliguri','sans-serif'],serif:['Noto Serif Bengali','serif']}}},plugins:[]};
