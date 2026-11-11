@@ -1,1 +1,11 @@
-import { Router } from 'express';import { ok } from '../utils/http.js';const r=Router();r.get('/delivery',(req,res)=>ok(res,{dhaka:Number(process.env.DELIVERY_CHARGE_DHAKA||80),outside:Number(process.env.DELIVERY_CHARGE_OUTSIDE||150),freeDeliveryAbove:Number(process.env.FREE_DELIVERY_ABOVE||0)}));export default r;
+import { Router } from "express";
+import { ok } from "../utils/http.js";
+const r = Router();
+r.get("/delivery", (req, res) =>
+  ok(res, {
+    dhaka: Number(process.env.DELIVERY_CHARGE_DHAKA || 80),
+    outside: Number(process.env.DELIVERY_CHARGE_OUTSIDE || 150),
+    freeDeliveryAbove: Number(process.env.FREE_DELIVERY_ABOVE || 0),
+  }),
+);
+export default r;
