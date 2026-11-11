@@ -73,6 +73,33 @@ test("Dolna end-to-end API order and stock flow", async () => {
   assert.ok(cookie, "login must set the httpOnly session cookie");
   assert.match(setCookies.join(";"), /HttpOnly/i);
 
+  for (let index = 0; index < 15; index++) {
+    const session = await request("/auth/me", { headers: adminHeaders() });
+    assert.equal(
+      session.status,
+      200,
+      "session checks must not exhaust the login rate limit",
+    );
+  }
+  const foreignOrigin = await request("/products/manage", {
+    headers: { ...adminHeaders(), origin: "https://untrusted.example" },
+  });
+  assert.equal(
+    foreignOrigin.status,
+    403,
+    "CORS must reject unconfigured origins",
+  );
+  const noCsrf = await request("/products", {
+    method: "POST",
+    headers: {
+      cookie,
+      origin: adminOrigin,
+      "content-type": "application/json",
+    },
+    body: "{}",
+  });
+  assert.equal(noCsrf.status, 403, "admin writes must require the CSRF header");
+
   const form = new FormData();
   for (const [k, v] of Object.entries({
     name: "Flow Test Dolna",
@@ -99,6 +126,92 @@ test("Dolna end-to-end API order and stock flow", async () => {
   assert.equal(createProduct.status, 201, await createProduct.clone().text());
   const created = (await createProduct.json()).data;
   const productId = created._id;
+
+  const jsonHeaders = { ...adminHeaders(), "content-type": "application/json" };
+  const productBody = {
+    name: "Variant Test Dolna",
+    slug: `variant-test-${Date.now()}`,
+    collection: "Test Collection",
+    price: 100,
+    isPublished: true,
+    variants: [{ label: "Large", stock: 5, price: 125 }],
+    specs: "",
+  };
+  const invalid = await request("/products", {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({ ...productBody, price: "" }),
+  });
+  assert.equal(invalid.status, 400);
+  assert.ok(
+    (await invalid.json()).errors.some((error) => error.path[0] === "price"),
+  );
+  const newVariant = await request("/products", {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify(productBody),
+  });
+  assert.equal(newVariant.status, 201, await newVariant.clone().text());
+  const variantProduct = (await newVariant.json()).data;
+  const variantId = variantProduct.variants[0]._id;
+  const editedVariant = await request(`/products/${variantProduct._id}`, {
+    method: "PUT",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      ...productBody,
+      variants: [
+        { _id: variantId, label: "Large updated", stock: 5, price: 125 },
+      ],
+    }),
+  });
+  assert.equal(editedVariant.status, 200, await editedVariant.clone().text());
+  assert.equal(
+    (await editedVariant.json()).data.variants[0]._id,
+    variantId,
+    "editing must preserve variant IDs used by existing carts and orders",
+  );
+  const duplicateSlug = await request("/products", {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify(productBody),
+  });
+  assert.equal(duplicateSlug.status, 409);
+  assert.match((await duplicateSlug.json()).message, /slug/i);
+  const reviewBody = {
+    name: "Test Customer",
+    location: "Dhaka",
+    text: "Excellent test product",
+    rating: 5,
+    isPublished: false,
+    sortOrder: 0,
+  };
+  const reviewResponse = await request("/admin/testimonials", {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify(reviewBody),
+  });
+  assert.equal(reviewResponse.status, 201);
+  const review = (await reviewResponse.json()).data;
+  const publishReview = await request(`/admin/testimonials/${review._id}`, {
+    method: "PUT",
+    headers: jsonHeaders,
+    body: JSON.stringify({ ...reviewBody, isPublished: true }),
+  });
+  assert.equal(publishReview.status, 200);
+  assert.ok(
+    (await (await request("/testimonials")).json()).data.some(
+      (item) => item._id === review._id,
+    ),
+  );
+  assert.equal(
+    (
+      await request(`/admin/testimonials/${review._id}`, {
+        method: "DELETE",
+        headers: adminHeaders(),
+      })
+    ).status,
+    200,
+  );
 
   const publish = await request(`/products/${productId}/publish`, {
     method: "PATCH",
@@ -152,6 +265,7 @@ test("Dolna end-to-end API order and stock flow", async () => {
   });
   assert.equal(orderResponse.status, 201, await orderResponse.clone().text());
   const order = (await orderResponse.json()).data;
+  assert.equal(order.paymentMethod, "cod");
   assert.equal(
     order.items[0].unitPrice,
     100,
@@ -166,6 +280,35 @@ test("Dolna end-to-end API order and stock flow", async () => {
   });
   assert.equal(repeated.status, 200);
   assert.equal((await repeated.json()).data.orderNumber, order.orderNumber);
+  const changedRetry = await request("/orders", {
+    method: "POST",
+    headers: orderHeaders,
+    body: JSON.stringify({
+      ...orderBody,
+      customer: { ...orderBody.customer, phone: "01812345678" },
+    }),
+  });
+  assert.equal(
+    changedRetry.status,
+    409,
+    "an idempotency key cannot retrieve a different customer's order",
+  );
+  const duplicateLines = await request("/orders/quote", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      items: [
+        { productId, quantity: 1 },
+        { productId, quantity: 1 },
+      ],
+      deliveryZone: "dhaka",
+    }),
+  });
+  assert.equal(
+    duplicateLines.status,
+    409,
+    "stock validation must combine repeated product lines",
+  );
 
   const duplicate = await request("/orders", {
     method: "POST",
@@ -206,6 +349,58 @@ test("Dolna end-to-end API order and stock flow", async () => {
     (await afterCancel.json()).data.stock,
     2,
     "cancelling must restore reserved stock",
+  );
+  const reopen = await request(`/orders/${order._id}/status`, {
+    method: "PATCH",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      status: "confirmed",
+      adminNote: "Private verification note",
+    }),
+  });
+  assert.equal(reopen.status, 200);
+  assert.equal(
+    (await (await request(`/products/${productId}`)).json()).data.stock,
+    1,
+  );
+  const lookup = await request(
+    `/orders/${order.orderNumber}?phone=01712345678`,
+  );
+  assert.equal(lookup.status, 200);
+  const lookupData = (await lookup.json()).data;
+  assert.equal(
+    lookupData.adminNote,
+    undefined,
+    "customer lookup must not expose private admin notes",
+  );
+  assert.equal(lookupData.idempotencyKey, undefined);
+  assert.equal(lookupData.statusHistory, undefined);
+  const invalidDate = await request("/orders?from=invalid-date", {
+    headers: adminHeaders(),
+  });
+  assert.equal(invalidDate.status, 400);
+  const stats = await request("/admin/stats", { headers: adminHeaders() });
+  assert.equal(stats.status, 200);
+  const csv = await request("/orders/export/csv", { headers: adminHeaders() });
+  assert.equal(csv.status, 200);
+  assert.match(await csv.text(), /DLN-/);
+  const removeOrder = await request(`/orders/${order._id}`, {
+    method: "DELETE",
+    headers: adminHeaders(),
+  });
+  assert.equal(removeOrder.status, 200);
+  assert.equal(
+    (await (await request(`/products/${productId}`)).json()).data.stock,
+    2,
+  );
+  assert.equal(
+    (
+      await request(`/products/${variantProduct._id}`, {
+        method: "DELETE",
+        headers: adminHeaders(),
+      })
+    ).status,
+    200,
   );
 
   const remove = await request(`/products/${productId}`, {

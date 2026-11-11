@@ -21,7 +21,7 @@ dolna-store/
 
 ## Prerequisites
 
-- Node.js 18+ (Node 20 or 22 recommended)
+- Node.js 22+ (required by the image validation dependency)
 - npm 9+
 - MongoDB local instance or MongoDB Atlas database
 - Cloudinary account for production image uploads
@@ -33,14 +33,14 @@ dolna-store/
    - `server/.env.example` → `server/.env`
    - `client/.env.example` → `client/.env`
    - `admin/.env.example` → `admin/.env`
-2. Set `MONGODB_URI` and a randomly generated `JWT_SECRET` of at least 32 characters in `server/.env`. Set `CLIENT_ORIGIN=http://localhost:5174` and `ADMIN_ORIGIN=http://localhost:5173`.
+2. Set `NODE_ENV=development`, `MONGODB_URI`, and a randomly generated `JWT_SECRET` of at least 32 characters in `server/.env`. Set `CLIENT_ORIGIN=http://localhost:5174` and `ADMIN_ORIGIN=http://localhost:5173`. Keep these local values separate from the production settings in Render.
 3. Add Cloudinary credentials to `server/.env` for image uploads. The store can run without Cloudinary, but uploads return HTTP 503 until configured.
 4. Install dependencies in each app:
 
    ```bash
-   cd server && npm install
-   cd ../client && npm install
-   cd ../admin && npm install
+   cd server && npm ci
+   cd ../client && npm ci
+   cd ../admin && npm ci
    ```
 
 5. Create the first administrator. Credentials are read only from the server environment; there are no default credentials:
@@ -72,7 +72,7 @@ dolna-store/
    cd admin && npm run dev                # Admin: http://localhost:5173
    ```
 
-   Health check: `GET http://localhost:5001/api/health`.
+   Health check: `GET http://localhost:5001/api/health`. Both frontends call their own `/api` path. Vite forwards those requests to `API_PROXY_TARGET` (default `http://127.0.0.1:5001`), so local development uses the local API.
 
 ## Environment variables
 
@@ -102,7 +102,7 @@ dolna-store/
 
 | Variable | Purpose |
 |---|---|
-| `VITE_API_URL` | API base URL, e.g. `http://localhost:5001/api` |
+| `API_PROXY_TARGET` | API origin for Vite development/preview; defaults to `http://127.0.0.1:5001` |
 | `VITE_SITE_URL` | Public canonical site URL |
 | `VITE_WHATSAPP_NUMBER` | WhatsApp number in international digits, without `+` |
 | `VITE_META_PIXEL_ID` | Optional Meta Pixel ID; no customer PII is sent |
@@ -111,9 +111,9 @@ dolna-store/
 
 | Variable | Purpose |
 |---|---|
-| `VITE_API_URL` | API base URL, e.g. `http://localhost:5001/api` |
+| `API_PROXY_TARGET` | API origin for Vite development/preview; defaults to `http://127.0.0.1:5001` |
 
-No admin credentials, JWT secret, or Cloudinary secret belongs in either Vite environment.
+Browser API requests always use `/api`; the old `VITE_API_URL` setting is no longer used. Production forwarding is configured in each app's `vercel.json`. No admin credentials, JWT secret, or Cloudinary secret belongs in either Vite environment.
 
 ## API reference
 
@@ -134,9 +134,9 @@ All API responses use `{ success, data }` or `{ success: false, message, errors?
 | POST | `/api/auth/login` | Public, rate limited | Login and set an httpOnly cookie |
 | POST | `/api/auth/logout` | Authenticated | Clear the session cookie |
 | GET | `/api/auth/me` | Authenticated | Current admin session |
-| GET | `/api/admin/stats` | Admin/staff | Store KPIs, status counts, low stock and revenue series |
-| GET | `/api/products/manage` | Admin/staff | Product management list |
-| GET | `/api/products/manage/:id` | Admin/staff | Get a product including unpublished fields |
+| GET | `/api/admin/stats` | Admin | Store KPIs, status counts, low stock and revenue series |
+| GET | `/api/products/manage` | Admin | Product management list |
+| GET | `/api/products/manage/:id` | Admin | Get a product including unpublished fields |
 | POST | `/api/products` | Admin | Create product and upload images |
 | PUT | `/api/products/:id` | Admin | Update product and reconcile images |
 | PATCH | `/api/products/:id/publish` | Admin | Publish/unpublish |
@@ -145,7 +145,7 @@ All API responses use `{ success, data }` or `{ success: false, message, errors?
 | GET | `/api/orders/export/csv` | Admin | CSV export with spreadsheet formula neutralization |
 | PATCH | `/api/orders/:id/status` | Admin/staff | Update status and stock reservation |
 | DELETE | `/api/orders/:id` | Admin | Delete order and release reserved stock when required |
-| GET | `/api/admin/testimonials` | Admin/staff | List all testimonials |
+| GET | `/api/admin/testimonials` | Admin | List all testimonials |
 | POST/PUT/DELETE | `/api/admin/testimonials` | Admin | Testimonial CRUD |
 | GET | `/sitemap.xml` | Public | Dynamic sitemap including published product URLs |
 
@@ -153,11 +153,11 @@ All API responses use `{ success, data }` or `{ success: false, message, errors?
 
 - Admin sessions use a signed HS256 JWT in an `httpOnly` cookie. The token is never returned in JSON or stored in browser local storage.
 - Admin write requests require `X-Requested-With: dolna-admin` and an allowed `Origin`. Admin routes reload the admin from MongoDB on each request, so deactivation takes effect immediately. Staff accounts are limited to viewing orders and updating order status; product, testimonial, dashboard, export and destructive actions require the `admin` role.
-- Login is rate-limited and locks an account for 15 minutes after five consecutive failures. Passwords are bcrypt-hashed with cost 12.
+- Failed login requests are rate-limited independently of session checks and logout. The API locks an account for 15 minutes after five consecutive failures. Passwords are bcrypt-hashed with cost 12.
 - CORS uses explicit `CLIENT_ORIGIN` and `ADMIN_ORIGIN` allow-lists. Helmet, request-size limits, API rate limits and Zod validation are enabled.
 - The order API accepts product IDs, variant IDs and quantities only. It calculates prices, delivery and totals from MongoDB; client-submitted prices are ignored.
 - Stock is reserved with conditional MongoDB updates. A partial reservation is compensated if another cart line cannot be reserved. Cancelling releases stock; reopening a cancelled order reserves it again.
-- `Idempotency-Key` protects retries. A matching phone/cart is also blocked for ten minutes.
+- `Idempotency-Key` protects matching retries and rejects reuse for a different order. Customer responses exclude private admin notes and internal request keys. A matching phone/cart is also blocked for ten minutes.
 - Bangladeshi phone numbers are normalized (including Bengali digits and `+880` / `880` prefixes) and validated before order creation.
 
 ## Image upload flow
@@ -175,6 +175,8 @@ Cloudinary upload_stream → dolna/products
 MongoDB Product.images[]
 ```
 
+Products accept both multipart form fields and JSON. Blank optional specifications/variants are treated as empty arrays. Existing variant `_id` values must be retained on edit so carts and order stock references remain valid. Product validation errors include field names and appear inside the editor. Each product can have up to eight images in total. Omitting `keepImages` during an API edit preserves existing images.
+
 No product images are stored on the application filesystem or committed to Git. When editing a product, the admin sends `keepImages` in the desired retained order plus any new files. Removed Cloudinary images are deleted after the MongoDB update succeeds. Cloudinary delete failures are logged. If Cloudinary credentials are absent, upload requests return HTTP 503.
 
 ## Verification
@@ -182,50 +184,56 @@ No product images are stored on the application filesystem or committed to Git. 
 ### Build commands
 
 ```bash
-cd client && npm install && npm run build
-cd ../admin && npm install && npm run build
-cd ../server && npm install
+cd client && npm ci && npm run build
+cd ../admin && npm ci && npm run build
+cd ../server && npm ci
 ```
 
-### API flow test
-
-Use a dedicated, empty test database. Start the API against that database, then run:
+### Regression and API flow tests
 
 ```bash
 cd server
-MONGODB_URI='mongodb://127.0.0.1:27017/dolna_flow_test' \
-TEST_BASE_URL='http://localhost:5001' \
-ADMIN_ORIGIN='http://localhost:5173' \
-TEST_ADMIN_EMAIL="$TEST_ADMIN_EMAIL" TEST_ADMIN_PASSWORD="$TEST_ADMIN_PASSWORD" npm run test:flow
+npm test
+# Creates a fresh dolna_verify_* database and removes it after the test.
+TEST_MONGODB_URI='mongodb://127.0.0.1:27017/?authSource=admin' npm run test:isolated
 ```
 
-The test invokes the `create-admin` CLI and exercises login cookie creation, unauthorized admin rejection, product create/publish/public listing, tampered-price rejection, idempotency, ten-minute duplicate blocking, oversell rejection without stock loss, cancellation stock restoration, and product deletion. It creates an admin and product in the configured database; use a disposable database only.
+For Atlas, set `TEST_MONGODB_URI` to a connection with permission to create and remove a temporary database. The runner replaces the database name, preserves the authentication database, starts a separate API, generates test administrator credentials, and cleans up afterward. It never uses the normal store database. The API flow covers admin authorization and CSRF, repeated session checks, multipart and JSON products, validation, duplicate slugs, variant ID preservation, publishing, testimonials, checkout quotes, server-calculated prices, COD orders, idempotency, duplicate carts, oversell rejection, cancellation/reopening/deletion stock restoration, private-note protection, dashboard statistics, CSV export, and logout.
+
+`npm run test:flow` remains available for an already running API. That mode requires `MONGODB_URI`, `TEST_BASE_URL`, `ADMIN_ORIGIN`, `TEST_ADMIN_EMAIL`, and `TEST_ADMIN_PASSWORD`, and must target a disposable empty database.
 
 ## Deployment
 
 ### Render (API)
 
 1. Create a Web Service from the repository with **Root Directory** `server`.
-2. Build command: `npm install`. Start command: `npm start`.
+2. Build command: `npm ci`. Start command: `npm start`.
 3. Add all required server environment variables. Use a strong random `JWT_SECRET`, Atlas `MONGODB_URI`, and Cloudinary credentials.
 4. Set `CLIENT_ORIGIN` and `ADMIN_ORIGIN` to the deployed Vercel storefront/admin origins. For cross-site cookies, production cookies use `SameSite=None; Secure`.
-5. Set the health check path to `/api/health`. Add the Render outbound IP/network access to the MongoDB Atlas allow-list as required by your Atlas configuration.
+5. Use Node.js 22 or newer. Set the health check path to `/api/health`. Add the Render outbound IP/network access to the MongoDB Atlas allow-list as required by your Atlas configuration.
 
 ### Vercel (storefront and admin)
 
-Deploy `client` and `admin` as two separate Vercel projects with their respective root directories. Set `VITE_API_URL` in both to the Render API URL plus `/api`. Set `VITE_SITE_URL` and `VITE_WHATSAPP_NUMBER` in the storefront. The SPA rewrite preserves `robots.txt` and `sitemap.xml` requests. Replace `https://dolna.example` in `client/public/robots.txt` with the real public domain and set the server `CLIENT_ORIGIN` to that domain so the dynamic `/sitemap.xml` uses the correct host.
+Deploy `client` and `admin` as two separate Vercel projects with their respective root directories. Both `vercel.json` files forward `/api/:path*` to `https://dolna-store.onrender.com/api/:path*` before the SPA fallback. If the API hostname changes, update both files. The storefront also forwards `/sitemap.xml` to the API. Set `VITE_SITE_URL` and `VITE_WHATSAPP_NUMBER` in the storefront. The current robots file uses `https://dolna-shop.vercel.app/sitemap.xml`; update it and the server `CLIENT_ORIGIN` if the public domain changes.
 
-Because the storefront, admin and API may be on different domains, ensure production cookie attributes remain `SameSite=None; Secure`, CORS allows both exact origins, and all admin writes carry the CSRF header and allowed Origin.
+The browser now sends admin requests to the admin website's own `/api` URL, and Vercel forwards them to Render. This keeps the session cookie on the admin website and avoids depending on third-party cookies. Production cookies remain `HttpOnly; SameSite=None; Secure`. Render must still allow the exact admin/storefront origins, and admin writes carry the CSRF header and browser Origin. API responses are marked `Cache-Control: no-store`.
+
+After applying these changes, redeploy the Render API and both Vercel projects, then sign in again. Keep Render `NODE_ENV=production`, `ADMIN_ORIGIN=https://admin-panel-delta-pearl.vercel.app`, and `CLIENT_ORIGIN=https://dolna-shop.vercel.app`. Local `.env` changes are ignored by Git and do not update hosting settings.
 
 ## Troubleshooting
 
-- **CORS error:** confirm exact scheme, hostname and port in `CLIENT_ORIGIN` / `ADMIN_ORIGIN`; do not use `*` with credentials. On macOS, Control Center/AirPlay can occupy port `5000`, so requests to that port may receive a 403 without CORS headers. Set the API `PORT=5001` and `VITE_API_URL=http://localhost:5001/api` in both `client/.env` and `admin/.env`. Restart Vite after editing either `.env` file.
-- **Cookie not set in production:** confirm HTTPS, `SameSite=None; Secure`, credentials enabled in Axios and CORS, and that the browser accepts the cross-site cookie policy.
+- **Local admin cannot save:** start the API on port 5001, keep local `NODE_ENV=development`, and ensure `ADMIN_ORIGIN` includes the exact local admin origin. `API_PROXY_TARGET` is an API origin without `/api`. Use the matching `localhost` or `127.0.0.1` origin throughout. Restart the API and Vite after environment changes.
+- **Production API requests return HTML or 404:** redeploy the updated Vercel projects; `/api` rewrites must precede the SPA fallback. Confirm the rewrite destination is the correct Render host.
+- **Cannot sign in:** the login screen now checks `/auth/me` before navigating. Confirm the API is reachable and the hosting origins match. A sleeping Render instance can take time to wake up; frontend requests allow 60 seconds.
+- **Product will not save:** the editor displays the exact invalid fields. Slugs must be unique and contain English letters, numbers, and hyphens. Optional JSON fields can be left empty or set to `[]`. Variants require a label and nonnegative integer stock. Keep existing variant `_id` values when editing.
 - **Cloudinary 503:** set all three Cloudinary credentials in the server environment and restart the API.
-- **Product uploads rejected:** use JPEG, PNG or WebP; each file must be no larger than 5 MB and no more than eight files per request.
-- **Order stock conflict:** the API is authoritative; ask the customer to refresh the cart and retry with available stock.
-- **MongoDB startup failure:** verify `MONGODB_URI`, database network access and credentials. The API intentionally fails fast when the database URI or a sufficiently long JWT secret is missing.
+- **Product uploads rejected:** use JPEG, PNG or WebP; each file must be no larger than 5 MB and a product can have at most eight retained/new images combined.
+- **Order stock conflict:** refresh the cart and retry with available stock. The API combines repeated cart lines when checking stock.
+- **Checkout confirmation:** a successful checkout clears the bag and keeps the order receipt open. The empty-bag redirect only applies before an order is completed.
+- **MongoDB startup failure:** verify the URI, database network access and credentials. The API fails fast if the URI or a sufficiently long JWT secret is missing.
 
-## Current implementation notes
+## Verified on 11 November 2026
 
-This codebase is delivered with the API, storefront and admin source. The build sandbox could not resolve `registry.npmjs.org` (DNS/network access was unavailable), so the included `package-lock.json` files currently preserve each app's root manifest but do not contain a fully resolved transitive dependency tree. Run `npm install` with registry access in each app before using `npm ci` or deploying; npm will populate the complete lockfiles. The TypeScript/TSX source passed a compiler syntax-transpile check and server JavaScript passed `node --check`, but full Vite builds, the API integration flow, MongoDB runtime, Cloudinary upload, browser walkthrough and screenshots were not verified in this environment. Runtime integration, live Cloudinary credentials, real MongoDB deployment and Vercel/Render deployment also depend on services and credentials not included in the project. Do not treat the source checks as proof that those external services have been configured.
+Both production frontend builds, five server regression tests, and the isolated API flow passed. A headless Chrome walkthrough using the same-origin Vite proxy and third-party cookie restrictions passed login, visible validation/duplicate-slug errors, product creation with a real Cloudinary image, editing while preserving variant IDs/images, storefront COD checkout, order confirmation/cancellation and stock restoration, testimonial publishing, product deletion, and logout. Chrome reported no page runtime errors. Temporary databases and uploaded images were removed. Dependency installation reported zero known vulnerabilities in all three applications after updating the affected packages.
+
+The existing deployed API, MongoDB connection, administrator access, and Cloudinary credentials were checked. The changed source and routing configuration still need to be redeployed before the live websites receive these fixes.

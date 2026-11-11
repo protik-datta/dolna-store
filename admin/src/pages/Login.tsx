@@ -9,9 +9,14 @@ export default function Login() {
   const nav = useNavigate();
   const qc = useQueryClient();
   const m = useMutation({
-    mutationFn: async () => api.post("/auth/login", { email, password }),
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["me"] });
+    mutationFn: async () => {
+      await api.post("/auth/login", { email: email.trim(), password });
+      // Verify the cookie was accepted before opening the dashboard.
+      return (await api.get("/auth/me")).data.data;
+    },
+    onSuccess: (admin) => {
+      qc.clear();
+      qc.setQueryData(["me"], admin);
       nav("/");
     },
     onError: (e) => setError(errorMessage(e)),

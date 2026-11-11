@@ -1,4 +1,4 @@
-import {useEffect,useState} from 'react';
+import {useEffect,useRef,useState} from 'react';
 import {useMutation,useQuery} from '@tanstack/react-query';
 import {useNavigate,Link} from 'react-router-dom';
 import {api,errorMessage,money} from '../lib/api';
@@ -13,8 +13,9 @@ export default function Checkout(){
   const [form,setForm]=useState({name:'',phone:'',address:'',deliveryZone:'dhaka',note:''});
   const [key]=useState(()=>crypto.randomUUID());
   const [error,setError]=useState('');
+  const checkoutComplete=useRef(false);
   useSeo('চেকআউট — দোলনা','আপনার অর্ডার সম্পন্ন করুন।');
-  useEffect(()=>{if(items.length===0)nav('/cart',{replace:true});},[items.length,nav]);
+  useEffect(()=>{if(items.length===0&&!checkoutComplete.current)nav('/cart',{replace:true});},[items.length,nav]);
   useEffect(()=>{if(items.length)track('InitiateCheckout',{content_ids:items.map(i=>i.product._id),content_type:'product',currency:'BDT',value:subtotal});},[items,subtotal]);
   const quote=useQuery({
     queryKey:['order-quote',items.map(i=>[i.product._id,i.variantId||'',i.quantity]),form.deliveryZone],
@@ -26,7 +27,7 @@ export default function Checkout(){
       const payload={items:items.map(i=>({productId:i.product._id,variantId:i.variantId,quantity:i.quantity})),customer:{name:form.name,phone:form.phone,address:form.address},deliveryZone:form.deliveryZone,note:form.note};
       return (await api.post('/orders',payload,{headers:{'Idempotency-Key':key}})).data.data as Order;
     },
-    onSuccess:order=>{clear();nav(`/order/${order.orderNumber}`,{state:{order}});},
+    onSuccess:order=>{checkoutComplete.current=true;clear();nav(`/order/${order.orderNumber}`,{replace:true,state:{order}});},
     onError:e=>setError(errorMessage(e))
   });
   const update=(field:keyof typeof form,value:string)=>setForm(p=>({...p,[field]:value}));

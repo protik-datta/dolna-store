@@ -20,19 +20,23 @@ export async function changeStock(item, direction) {
 }
 export async function reserveItems(items) {
   const reserved = [];
-  for (const item of items) {
-    const ok = await changeStock(item, -1);
-    if (!ok) {
-      for (const done of reserved) await changeStock(done, 1);
-      const p = await Product.findById(item.product);
-      throw Object.assign(
-        new Error(`${p?.name || "পণ্য"}-এর পর্যাপ্ত স্টক নেই।`),
-        { status: 409 },
-      );
+  try {
+    for (const item of items) {
+      const ok = await changeStock(item, -1);
+      if (!ok) {
+        const p = await Product.findById(item.product);
+        throw Object.assign(
+          new Error(`${p?.name || "পণ্য"}-এর পর্যাপ্ত স্টক নেই।`),
+          { status: 409 },
+        );
+      }
+      reserved.push(item);
     }
-    reserved.push(item);
+    return reserved;
+  } catch (error) {
+    for (const done of reserved) await changeStock(done, 1);
+    throw error;
   }
-  return reserved;
 }
 export async function releaseItems(items) {
   for (const item of items) await changeStock(item, 1);

@@ -1,6 +1,7 @@
 import jwt from "jsonwebtoken";
 import { Admin } from "../models/index.js";
 import { fail, asyncHandler } from "../utils/http.js";
+import { adminOrigins } from "../config/origins.js";
 export const requireAdmin = asyncHandler(async (req, res, next) => {
   const token = req.cookies?.dolna_session;
   if (!token) return fail(res, "অনুগ্রহ করে লগইন করুন।", 401);
@@ -27,10 +28,7 @@ export const requireRole =
 export const csrf = (req, res, next) => {
   if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
     const origin = req.get("origin");
-    const allowed = (process.env.ADMIN_ORIGIN || "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const allowed = adminOrigins();
     if (
       req.get("x-requested-with") !== "dolna-admin" ||
       !origin ||

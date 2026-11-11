@@ -10,87 +10,12 @@ import {
   cloudinary,
 } from "../config/cloudinary.js";
 import { fileTypeFromBuffer } from "file-type";
+import { parseProduct } from "../services/product-input.js";
 const router = Router();
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 8 },
 });
-const productInput = z.object({
-  name: z.string().min(2).max(120),
-  slug: z
-    .string()
-    .min(2)
-    .max(140)
-    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-  collection: z.string().min(2).max(80),
-  shortDescription: z.string().max(300).optional().default(""),
-  description: z.string().max(10000).optional().default(""),
-  price: z.coerce.number().min(0),
-  compareAtPrice: z.preprocess(
-    (v) => (v === "" ? undefined : v),
-    z.coerce.number().min(0).optional(),
-  ),
-  stock: z.coerce.number().int().min(0).default(0),
-  features: z.string().optional().default(""),
-  specs: z.string().optional().default("[]"),
-  variants: z.string().optional().default("[]"),
-  isPublished: z.string().optional(),
-  isFeatured: z.string().optional(),
-  sortOrder: z.coerce.number().optional().default(0),
-  keepImages: z.string().optional().default("[]"),
-});
-function parseArray(value, schema, label) {
-  let parsed;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw Object.assign(new Error(`${label} must be valid JSON.`), {
-      status: 400,
-    });
-  }
-  return schema.parse(parsed);
-}
-const parseProduct = (body) => {
-  const v = productInput.parse(body);
-  const specs = parseArray(
-    v.specs,
-    z.array(z.object({ label: z.string().min(1), value: z.string().min(1) })),
-    "Specifications",
-  );
-  const variants = parseArray(
-    v.variants,
-    z.array(
-      z.object({
-        label: z.string().min(1),
-        sku: z.string().optional(),
-        price: z.preprocess(
-          (v) => (v === null || v === "" ? undefined : v),
-          z.coerce.number().min(0).optional(),
-        ),
-        stock: z.coerce.number().int().min(0),
-      }),
-    ),
-    "Variants",
-  );
-  const keepImages = parseArray(
-    v.keepImages,
-    z.array(z.string()),
-    "keepImages",
-  );
-  return {
-    ...v,
-    collectionName: v.collection,
-    features: v.features
-      .split("\n")
-      .map((s) => s.trim())
-      .filter(Boolean),
-    specs,
-    variants,
-    keepImages,
-    isPublished: v.isPublished === "true",
-    isFeatured: v.isFeatured === "true",
-  };
-};
 async function uploadImages(files) {
   if (!files?.length) return [];
   if (!configureCloudinary())
@@ -258,6 +183,7 @@ router.post(
   upload.array("images", 8),
   asyncHandler(async (req, res) => {
     const v = parseProduct(req.body);
+    if (v.variants.some((variant) => variant._id)) return fail(res, "New variants must not contain existing IDs.", 400);
     const images = await uploadImages(req.files);
     try {
       const p = await Product.create({ ...v, images });
@@ -276,7 +202,14 @@ router.put(
     const p = await Product.findById(req.params.id);
     if (!p) return fail(res, "পণ্যটি পাওয়া যায়নি।", 404);
     const v = parseProduct(req.body);
-    const keep = v.keepImages;
+    const keep = v.keepImages ?? p.images.map((image) => image.publicId);
+    if (new Set(keep).size !== keep.length || keep.some((id) => !p.images.some((image) => image.publicId === id)))
+      return fail(res, "Retained images must belong to this product and cannot be repeated.", 400);
+    if (keep.length + (req.files?.length || 0) > 8)
+      return fail(res, "A product can have at most eight images.", 400);
+    const variantIds = v.variants.map((variant) => variant._id).filter(Boolean);
+    if (new Set(variantIds).size !== variantIds.length || variantIds.some((id) => !p.variants.id(id)))
+      return fail(res, "Variant IDs must belong to this product and cannot be repeated.", 400);
     const old = keep
       .map((id) => p.images.find((i) => i.publicId === id))
       .filter(Boolean);
@@ -290,7 +223,9 @@ router.put(
       );
     const added = await uploadImages(req.files);
     try {
-      Object.assign(p, v, { images: [...old, ...added] });
+      // Helpers from the multipart form are not document fields.
+      const { keepImages, ...fields } = v;
+      Object.assign(p, fields, { images: [...old, ...added] });
       await p.save();
     } catch (e) {
       await deleteImages(added);

@@ -1,1 +1,7 @@
-{"rewrites":[{"source":"/((?!robots\\.txt|sitemap\\.xml).*)","destination":"/index.html"}]}
+{
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "https://dolna-store.onrender.com/api/:path*" },
+    { "source": "/sitemap.xml", "destination": "https://dolna-store.onrender.com/sitemap.xml" },
+    { "source": "/((?!robots\\.txt).*)", "destination": "/index.html" }
+  ]
+}

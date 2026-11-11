@@ -5,15 +5,24 @@ import { z } from "zod";
 import { Admin } from "../models/index.js";
 import { ok, fail, asyncHandler } from "../utils/http.js";
 import { requireAdmin } from "../middleware/auth.js";
+import rateLimit from "express-rate-limit";
 const router = Router();
 const dummyHash =
   "$2a$12$C6UzMDM.H6dfI/f/IKcEe.4Bq8w4q7G9Z8xK2vKz3wQmX9mJ7kQ2e";
 router.post(
   "/login",
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    skipSuccessfulRequests: true,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, message: "Too many login attempts. Please try again in 15 minutes." },
+  }),
   asyncHandler(async (req, res) => {
     const body = z
       .object({
-        email: z.string().email().max(254),
+        email: z.string().trim().email().max(254),
         password: z.string().min(1).max(200),
       })
       .parse(req.body);

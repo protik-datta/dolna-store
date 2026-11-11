@@ -30,6 +30,7 @@ router.get(
           ],
         }).limit(10),
         Order.aggregate([
+          { $match: { status: { $ne: "cancelled" } } },
           { $unwind: "$items" },
           {
             $group: {

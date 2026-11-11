@@ -6,6 +6,7 @@ import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
 import { connectDB } from "./config/db.js";
 import { configureCloudinary } from "./config/cloudinary.js";
+import { allowedOrigins } from "./config/origins.js";
 import auth from "./routes/auth.js";
 import products from "./routes/products.js";
 import orders from "./routes/orders.js";
@@ -19,15 +20,11 @@ import { z } from "zod";
 const app = express();
 app.set("trust proxy", 1);
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
-const origins = [
-  ...(process.env.CLIENT_ORIGIN || "").split(","),
-  ...(process.env.ADMIN_ORIGIN || "").split(","),
-]
-  .map((s) => s.trim())
-  .filter(Boolean);
 app.use(
   cors({
-    origin: true,
+    origin(origin, callback) {
+      callback(origin && !allowedOrigins().includes(origin) ? new Error("CORS origin denied") : null, true);
+    },
     credentials: true,
   }),
 );
@@ -35,11 +32,13 @@ app.use(express.json({ limit: "100kb" }));
 app.use(cookieParser());
 app.use(
   "/api",
+  (req, res, next) => { res.set("Cache-Control", "no-store"); next(); },
   rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 300,
     standardHeaders: true,
     legacyHeaders: false,
+    message: { success: false, message: "Too many requests. Please try again in a few minutes." },
   }),
 );
 app.get("/api/health", (req, res) =>
@@ -47,19 +46,12 @@ app.get("/api/health", (req, res) =>
 );
 app.use(
   "/api/auth",
-  rateLimit({
-    windowMs: 15 * 60 * 1000,
-    limit: 10,
-    standardHeaders: true,
-    legacyHeaders: false,
-  }),
   csrf,
   auth,
 );
 app.use("/api/products", csrf, products);
 app.use(
   "/api/orders",
-  rateLimit({ windowMs: 15 * 60 * 1000, limit: 30 }),
   orders,
 );
 app.get("/api/testimonials", (req, res, next) => {

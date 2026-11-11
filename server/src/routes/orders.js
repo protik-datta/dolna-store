@@ -10,34 +10,96 @@ import {
 } from "../utils/http.js";
 import { requireAdmin, requireRole, csrf } from "../middleware/auth.js";
 import { reserveItems, releaseItems } from "../services/stock.js";
+import rateLimit from "express-rate-limit";
+import { createHash, randomBytes } from "node:crypto";
 const router = Router();
+const orderLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Too many order requests. Please try again in a few minutes.",
+  },
+});
 const orderBody = z.object({
   items: z
     .array(
       z.object({
-        productId: z.string().regex(/^[a-f\d]{24}$/i),
+        productId: z
+          .string()
+          .regex(/^[a-f\d]{24}$/i)
+          .toLowerCase(),
         variantId: z
           .string()
           .regex(/^[a-f\d]{24}$/i)
+          .toLowerCase()
           .optional(),
         quantity: z.coerce.number().int().min(1).max(30),
       }),
     )
     .min(1)
-    .max(20),
+    .max(20)
+    .transform((items) => {
+      const merged = new Map();
+      for (const item of items) {
+        const key = `${item.productId}:${item.variantId || ""}`;
+        const existing = merged.get(key);
+        if (existing) existing.quantity += item.quantity;
+        else merged.set(key, { ...item });
+      }
+      return [...merged.values()];
+    })
+    .refine(
+      (items) => items.every((item) => item.quantity <= 30),
+      "Maximum quantity per product variant is 30.",
+    ),
   customer: z.object({
     name: z.string().trim().min(2).max(100),
     phone: z.string().min(8).max(20),
     address: z.string().trim().min(8).max(1000),
   }),
   deliveryZone: z.enum(["dhaka", "outside"]),
-  paymentMethod: z.enum(["manual"]).default("manual"),
+  paymentMethod: z.enum(["manual", "cod"]).default("cod"),
   note: z.string().max(1000).optional().default(""),
 });
 function makeNumber() {
   const d = new Date(),
     date = `${String(d.getFullYear()).slice(-2)}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
-  return `DLN-${date}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+  return `DLN-${date}-${randomBytes(4).toString("hex").toUpperCase()}`;
+}
+function requestHash(value) {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        customer: {
+          ...value.customer,
+          phone: normalizePhone(value.customer.phone),
+        },
+        items: value.items
+          .map(
+            (item) =>
+              `${item.productId}:${item.variantId || ""}:${item.quantity}`,
+          )
+          .sort(),
+        deliveryZone: value.deliveryZone,
+        paymentMethod: value.paymentMethod,
+        note: value.note,
+      }),
+    )
+    .digest("hex");
+}
+function publicOrder(order) {
+  const {
+    adminNote,
+    statusHistory,
+    idempotencyKey,
+    dedupeKey,
+    requestHash,
+    ...data
+  } = order.toObject();
+  return data;
 }
 function deliveryFor(subtotal, zone) {
   const threshold = Number(process.env.FREE_DELIVERY_ABOVE || 0);
@@ -98,15 +160,31 @@ router.post(
 );
 router.post(
   "/",
+  orderLimit,
   asyncHandler(async (req, res) => {
     const v = orderBody.parse(req.body);
     const phone = normalizePhone(v.customer.phone);
     if (!/^01[3-9]\d{8}$/.test(phone))
       return fail(res, "সঠিক বাংলাদেশি মোবাইল নম্বর দিন।", 400);
-    const key = req.get("Idempotency-Key");
+    const key = z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .optional()
+      .parse(req.get("Idempotency-Key"));
+    const hash = requestHash(v);
     if (key) {
       const old = await Order.findOne({ idempotencyKey: key });
-      if (old) return ok(res, old, 200);
+      if (old) {
+        if (old.requestHash !== hash)
+          return fail(
+            res,
+            "This request key was already used for a different order. Refresh checkout and try again.",
+            409,
+          );
+        return ok(res, publicOrder(old), 200);
+      }
     }
     const ids = v.items.map((i) => i.productId);
     const products = await Product.find({
@@ -176,14 +254,21 @@ router.post(
         ],
         stockReserved: true,
         idempotencyKey: key || undefined,
+        requestHash: hash,
         dedupeKey,
       });
-      return ok(res, order, 201);
+      return ok(res, publicOrder(order), 201);
     } catch (e) {
       await releaseItems(snapshots);
       if (e.code === 11000 && key) {
         const old = await Order.findOne({ idempotencyKey: key });
-        if (old) return ok(res, old);
+        if (old?.requestHash === hash) return ok(res, publicOrder(old));
+        if (old)
+          return fail(
+            res,
+            "This request key was already used for a different order.",
+            409,
+          );
       }
       throw e;
     }
@@ -208,7 +293,7 @@ router.get(
     });
     if (!order)
       return fail(res, "অর্ডারটি পাওয়া যায়নি। ফোন নম্বর যাচাই করুন।", 404);
-    ok(res, order);
+    ok(res, publicOrder(order));
   }),
 );
 router.use(requireAdmin, csrf);
@@ -223,8 +308,8 @@ router.get(
           .optional(),
         page: z.coerce.number().int().min(1).default(1),
         limit: z.coerce.number().int().min(1).max(100).default(20),
-        from: z.string().optional(),
-        to: z.string().optional(),
+        from: z.string().date().optional(),
+        to: z.string().date().optional(),
       })
       .parse(req.query);
     const f = {};
@@ -332,7 +417,11 @@ router.patch(
     }
     o.status = v.status;
     if (v.adminNote !== undefined) o.adminNote = v.adminNote;
-    o.statusHistory.push({ status: v.status, by: req.admin.name });
+    o.statusHistory.push({
+      status: v.status,
+      by: req.admin.name,
+      note: v.adminNote,
+    });
     await o.save();
     ok(res, o);
   }),

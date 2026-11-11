@@ -19,7 +19,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <HelmetProvider>
       <QueryClientProvider client={client}>
         <CartProvider>
-          <BrowserRouter future={{v7_startTransition:true,v7_relativeSplatPath:true}}>
+          <BrowserRouter>
             <Suspense fallback={<div className="container section">লোড হচ্ছে...</div>}>
               <Routes>
                 <Route element={<Layout/>}>

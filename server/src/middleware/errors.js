@@ -20,7 +20,7 @@ export function errorHandler(err, req, res, next) {
     message = "সঠিক আইডি দিন।";
   } else if (err.code === 11000) {
     status = 409;
-    message = "এই তথ্যটি আগে থেকেই আছে।";
+    message = err.keyPattern?.slug ? "This URL slug is already used. Choose a different slug." : "এই তথ্যটি আগে থেকেই আছে।";
   } else if (err instanceof multer.MulterError) {
     status = 400;
     message = err.message;
