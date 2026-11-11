@@ -177,6 +177,10 @@ MongoDB Product.images[]
 
 Products accept both multipart form fields and JSON. Blank optional specifications/variants are treated as empty arrays. Existing variant `_id` values must be retained on edit so carts and order stock references remain valid. Product validation errors include field names and appear inside the editor. Each product can have up to eight images in total. Omitting `keepImages` during an API edit preserves existing images.
 
+New products and testimonials in the admin have **Show on website** selected. **Save & publish** makes the item public; turning that option off changes the action to **Save as draft** and keeps it hidden. The management tables show **Live on website** or **Draft — click to publish**, and clicking the visibility button publishes or hides the item. The public API continues to exclude drafts.
+
+Storefront catalogue queries refresh every 30 seconds while the page is visible, and refresh on focus, navigation, and reconnection. All published testimonials are shown. API failures display a retry action instead of the empty-catalogue message.
+
 No product images are stored on the application filesystem or committed to Git. When editing a product, the admin sends `keepImages` in the desired retained order plus any new files. Removed Cloudinary images are deleted after the MongoDB update succeeds. Cloudinary delete failures are logged. If Cloudinary credentials are absent, upload requests return HTTP 503.
 
 ## Verification
@@ -201,6 +205,18 @@ TEST_MONGODB_URI='mongodb://127.0.0.1:27017/?authSource=admin' npm run test:isol
 For Atlas, set `TEST_MONGODB_URI` to a connection with permission to create and remove a temporary database. The runner replaces the database name, preserves the authentication database, starts a separate API, generates test administrator credentials, and cleans up afterward. It never uses the normal store database. The API flow covers admin authorization and CSRF, repeated session checks, multipart and JSON products, validation, duplicate slugs, variant ID preservation, publishing, testimonials, checkout quotes, server-calculated prices, COD orders, idempotency, duplicate carts, oversell rejection, cancellation/reopening/deletion stock restoration, private-note protection, dashboard statistics, CSV export, and logout.
 
 `npm run test:flow` remains available for an already running API. That mode requires `MONGODB_URI`, `TEST_BASE_URL`, `ADMIN_ORIGIN`, `TEST_ADMIN_EMAIL`, and `TEST_ADMIN_PASSWORD`, and must target a disposable empty database.
+
+### Publishing browser regression
+
+Install dependencies in all three apps first. The browser test starts the API and both Vite apps on temporary ports and creates/removes its own test database:
+
+```bash
+cd server
+npx playwright install chromium
+TEST_MONGODB_URI='mongodb://127.0.0.1:27017/?authSource=admin' npm run test:browser
+```
+
+To use an installed Chrome instead, set `PLAYWRIGHT_EXECUTABLE_PATH` to its executable path. The test saves a testimonial and product with the admin's defaults and verifies the storefront, keeps drafts hidden, publishes a draft from the table, renders more than three testimonials, checks that an open page refreshes after unpublishing, and verifies API error/retry behavior.
 
 ## Deployment
 
@@ -237,3 +253,5 @@ After applying these changes, redeploy the Render API and both Vercel projects, 
 Both production frontend builds, five server regression tests, and the isolated API flow passed. A headless Chrome walkthrough using the same-origin Vite proxy and third-party cookie restrictions passed login, visible validation/duplicate-slug errors, product creation with a real Cloudinary image, editing while preserving variant IDs/images, storefront COD checkout, order confirmation/cancellation and stock restoration, testimonial publishing, product deletion, and logout. Chrome reported no page runtime errors. Temporary databases and uploaded images were removed. Dependency installation reported zero known vulnerabilities in all three applications after updating the affected packages.
 
 The existing deployed API, MongoDB connection, administrator access, and Cloudinary credentials were checked. The changed source and routing configuration still need to be redeployed before the live websites receive these fixes.
+
+The publishing follow-up reproduced the live visibility issue: a newly saved testimonial was a draft. That specific saved review was published and verified in Chrome on the live storefront. The additional isolated publishing browser regression passed publication defaults for reviews/products, draft visibility, one-click publication, automatic refresh after unpublishing, more than three displayed reviews, and API error recovery.

@@ -3,6 +3,13 @@ export const api = axios.create({
   baseURL: "/api",
   timeout: 60000,
 });
+// Keep open catalogue pages up to date after changes in the separate admin app.
+export const catalogQueryOptions = {
+  staleTime: 0,
+  refetchOnWindowFocus: true,
+  refetchOnReconnect: true,
+  refetchInterval: 30_000,
+} as const;
 export const money = (n: number) => `৳${Math.round(n).toLocaleString("en-BD")}`;
 export const imageUrl = (url: string, w = 900) =>
   url.includes("res.cloudinary.com")

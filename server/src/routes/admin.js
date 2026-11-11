@@ -121,6 +121,19 @@ router.put(
     ok(res, t);
   }),
 );
+router.patch(
+  "/testimonials/:id/publish",
+  requireRole("admin"),
+  asyncHandler(async (req, res) => {
+    const body = z.object({ isPublished: z.boolean() }).parse(req.body);
+    const review = await Testimonial.findByIdAndUpdate(req.params.id, body, {
+      new: true,
+      runValidators: true,
+    });
+    if (!review) return fail(res, "রিভিউ পাওয়া যায়নি।", 404);
+    ok(res, review);
+  }),
+);
 router.delete(
   "/testimonials/:id",
   requireRole("admin"),

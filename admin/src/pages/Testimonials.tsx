@@ -16,7 +16,7 @@ const empty = {
   location: "",
   text: "",
   rating: 5,
-  isPublished: false,
+  isPublished: true,
   sortOrder: 0,
 };
 export default function Testimonials() {
@@ -36,11 +36,15 @@ export default function Testimonials() {
       editing?._id
         ? api.put(`/admin/testimonials/${editing._id}`, form)
         : api.post("/admin/testimonials", form),
-    onSuccess: () => {
+    onSuccess: (response) => {
       refresh();
       setEditing(null);
       setForm(empty);
-      setMessage("Review saved successfully.");
+      setMessage(
+        response.data.data.isPublished
+          ? "Review published. It is visible on the website."
+          : "Review saved as a draft. It is hidden from the website.",
+      );
     },
     onError: (e) => setError(errorMessage(e)),
   });
@@ -49,6 +53,21 @@ export default function Testimonials() {
     onSuccess: () => {
       refresh();
       setMessage("Review deleted.");
+    },
+    onError: (e) => setError(errorMessage(e)),
+  });
+  const publish = useMutation({
+    mutationFn: (review: Review) =>
+      api.patch(`/admin/testimonials/${review._id}/publish`, {
+        isPublished: !review.isPublished,
+      }),
+    onSuccess: (response) => {
+      refresh();
+      setMessage(
+        response.data.data.isPublished
+          ? "Review published. It is visible on the website."
+          : "Review moved to drafts. It is hidden from the website.",
+      );
     },
     onError: (e) => setError(errorMessage(e)),
   });
@@ -101,7 +120,7 @@ export default function Testimonials() {
                 <th>Customer</th>
                 <th>Review</th>
                 <th>Rating</th>
-                <th>Published</th>
+                <th>Website visibility</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -120,19 +139,25 @@ export default function Testimonials() {
                     </span>
                   </td>
                   <td>
-                    <span
-                      className={
+                    <button
+                      className={r.isPublished ? "toggle on" : "toggle"}
+                      disabled={publish.isPending}
+                      title={
                         r.isPublished
-                          ? "status status-delivered"
-                          : "status status-pending"
+                          ? "Hide this review from the website"
+                          : "Publish this review on the website"
                       }
+                      onClick={() => publish.mutate(r)}
                     >
-                      {r.isPublished ? "Published" : "Draft"}
-                    </span>
+                      {r.isPublished
+                        ? "Live on website"
+                        : "Draft — click to publish"}
+                    </button>
                   </td>
                   <td>
                     <div className="row-actions">
                       <button
+                        title="Edit review"
                         onClick={() => {
                           setError("");
                           setEditing(r);
@@ -149,6 +174,7 @@ export default function Testimonials() {
                         <Edit2 size={16} />
                       </button>
                       <button
+                        title="Delete review"
                         onClick={() => {
                           if (confirm("Delete this testimonial?"))
                             del.mutate(r._id);
@@ -238,8 +264,13 @@ export default function Testimonials() {
                   setForm({ ...form, isPublished: e.target.checked })
                 }
               />{" "}
-              Published
+              Show on website
             </label>
+            <p className="hint">
+              {form.isPublished
+                ? "This review will appear in the website's customer reviews."
+                : "This review will be saved as a draft and will not appear on the website."}
+            </p>
             {error && (
               <div className="alert" role="alert">
                 {error}
@@ -254,7 +285,11 @@ export default function Testimonials() {
                 Cancel
               </button>
               <button className="primary-btn" disabled={save.isPending}>
-                {save.isPending ? "Saving..." : "Save review"}
+                {save.isPending
+                  ? "Saving..."
+                  : form.isPublished
+                    ? "Save & publish"
+                    : "Save as draft"}
               </button>
             </div>
           </form>

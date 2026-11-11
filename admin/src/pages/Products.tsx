@@ -40,7 +40,7 @@ const blank: FormState = {
   features: "",
   variants: "[]",
   specs: "[]",
-  isPublished: false,
+  isPublished: true,
   isFeatured: false,
   sortOrder: "0",
 };
@@ -104,23 +104,31 @@ export default function Products() {
         ? api.put(`/products/${editing._id}`, fd, config)
         : api.post("/products", fd, config);
     },
-    onSuccess: () => {
+    onSuccess: (response) => {
       invalidate();
       setEditing(null);
       setForm(blank);
       setFiles([]);
       setKept([]);
       setProgress(0);
-      setMessage("Product saved successfully.");
+      setMessage(
+        response.data.data.isPublished
+          ? "Product published. It is visible on the website."
+          : "Product saved as a draft. It is hidden from the website.",
+      );
     },
     onError: (e) => setError(errorMessage(e)),
   });
   const toggle = useMutation({
     mutationFn: (p: Product) =>
       api.patch(`/products/${p._id}/publish`, { isPublished: !p.isPublished }),
-    onSuccess: () => {
+    onSuccess: (response) => {
       invalidate();
-      setMessage("Publication status updated.");
+      setMessage(
+        response.data.data.isPublished
+          ? "Product published. It is visible on the website."
+          : "Product moved to drafts. It is hidden from the website.",
+      );
     },
     onError: (e) => setMessage(errorMessage(e)),
   });
@@ -270,7 +278,7 @@ export default function Products() {
                 <th>Collection</th>
                 <th>Price</th>
                 <th>Stock</th>
-                <th>Published</th>
+                <th>Website visibility</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -301,9 +309,16 @@ export default function Products() {
                     <button
                       className={p.isPublished ? "toggle on" : "toggle"}
                       disabled={toggle.isPending}
+                      title={
+                        p.isPublished
+                          ? "Hide this product from the website"
+                          : "Publish this product on the website"
+                      }
                       onClick={() => toggle.mutate(p)}
                     >
-                      {p.isPublished ? "Published" : "Draft"}
+                      {p.isPublished
+                        ? "Live on website"
+                        : "Draft — click to publish"}
                     </button>
                   </td>
                   <td>
@@ -616,7 +631,7 @@ export default function Products() {
                       setForm({ ...form, isPublished: e.target.checked })
                     }
                   />{" "}
-                  Published
+                  Show on website
                 </label>
                 <label className="check-label">
                   <input
@@ -629,6 +644,11 @@ export default function Products() {
                   Featured
                 </label>
               </div>
+              <p className="hint">
+                {form.isPublished
+                  ? "This product will appear in the website's catalogue."
+                  : "This product will be saved as a draft and will not appear on the website."}
+              </p>
             </fieldset>
             {error && (
               <div className="alert" role="alert">
@@ -650,7 +670,11 @@ export default function Products() {
                 Cancel
               </button>
               <button className="primary-btn" disabled={save.isPending}>
-                {save.isPending ? "Saving..." : "Save product"}
+                {save.isPending
+                  ? "Saving..."
+                  : form.isPublished
+                    ? "Save & publish"
+                    : "Save as draft"}
               </button>
             </div>
           </form>

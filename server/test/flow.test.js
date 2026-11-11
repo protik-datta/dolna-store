@@ -192,12 +192,46 @@ test("Dolna end-to-end API order and stock flow", async () => {
   });
   assert.equal(reviewResponse.status, 201);
   const review = (await reviewResponse.json()).data;
+  assert.ok(
+    !(await (await request("/testimonials")).json()).data.some(
+      (item) => item._id === review._id,
+    ),
+    "draft reviews must remain hidden from the website",
+  );
   const publishReview = await request(`/admin/testimonials/${review._id}`, {
     method: "PUT",
     headers: jsonHeaders,
     body: JSON.stringify({ ...reviewBody, isPublished: true }),
   });
   assert.equal(publishReview.status, 200);
+  assert.ok(
+    (await (await request("/testimonials")).json()).data.some(
+      (item) => item._id === review._id,
+    ),
+  );
+  const hideReview = await request(
+    `/admin/testimonials/${review._id}/publish`,
+    {
+      method: "PATCH",
+      headers: jsonHeaders,
+      body: JSON.stringify({ isPublished: false }),
+    },
+  );
+  assert.equal(hideReview.status, 200);
+  assert.ok(
+    !(await (await request("/testimonials")).json()).data.some(
+      (item) => item._id === review._id,
+    ),
+  );
+  const republishReview = await request(
+    `/admin/testimonials/${review._id}/publish`,
+    {
+      method: "PATCH",
+      headers: jsonHeaders,
+      body: JSON.stringify({ isPublished: true }),
+    },
+  );
+  assert.equal(republishReview.status, 200);
   assert.ok(
     (await (await request("/testimonials")).json()).data.some(
       (item) => item._id === review._id,
